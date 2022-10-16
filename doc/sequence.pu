@@ -1,0 +1,85 @@
+@startuml
+skinparam ParticipantPadding 10
+skinparam BoxPadding 10
+skinparam Padding 3
+title Sequence Diagram
+hide footbox
+
+actor user as "User"
+participant browser as "Browser"
+
+participant cloudfront as "CloudFront"
+participant lambda as "Lambda@Edge \n (Viewer Request)"
+
+participant cognito as "Cognito"
+participant saml as "IAM Identity Center (SSO) \n (SAML)"
+participant origin as "(Origin)"
+
+
+user -> browser: access
+
+activate browser
+browser -> cloudfront: (GET https://<web-app>)
+
+cloudfront -> lambda: Viewer Request
+activate lambda
+
+lambda -> lambda: Parse ID Token from cookie
+lambda -> lambda: Parse Auth Code from query string
+
+alt (Invalid or no "ID Token") and (no "Auth Code")
+  lambda -> browser: 302 - To redirect to Authorize Endpoint
+  deactivate lambda
+  browser -> browser: Set nonce in cookie
+
+  browser -> cognito: Redirect to Cognito Authorize Endpoint with nonce \n (GET https://<Cognito domain>/oauth2/authorize)
+  activate cognito
+  ...
+  note over browser, cognito: (some interactions)
+  ...
+  cognito -> browser: 302 - To redirect to IAM Identity Center (SSO) Sign in
+  deactivate cognito
+
+  browser -> saml: Redirect to SSO Sing in (GET https://<region>.signin.aws)
+  activate saml
+  saml -> browser: Return sign in form
+  deactivate saml
+  deactivate browser
+
+  user -> browser: Input username and password \n (and optionally MFA Pin)
+  activate browser
+  browser -> saml: Sign in (POST)
+  activate saml
+  ...
+  note over browser, saml: (some interactions)
+  ...
+  saml -> browser: 302 - To redirect to Web-App (Callback) with "Auth Code"
+  deactivate saml
+
+  browser -> cloudfront: Redirect to Callback with nonce \n (GET https://<web-app>/auth?code=...)
+  cloudfront -> lambda: Viewer Request
+  activate lambda
+  lambda -> lambda: Parse Auth Code from query string
+
+  lambda -> cognito: Authorize via Cognito Token Endpoint \n (POST https://<Cognito Domain>/oauth2/token)
+  activate cognito
+  cognito -> lambda: Return ID, Access, and Refresh tokens
+  deactivate cognito
+
+  lambda -> lambda: Validate nonce
+
+  lambda -> browser: 307 - To redirect to Web-App
+  deactivate lambda
+  browser -> browser: Set ID, Access, and Refresh tokens in cookie
+  browser -> cloudfront: Redirect to Web-App (GET https://<web-app>)
+  deactivate browser
+
+else Valid "ID Token"
+  activate lambda
+  lambda -> cloudfront: Pass thue request
+  cloudfront -> origin: Origin Request
+  activate origin
+  origin -> browser: Return content
+  deactivate origin
+end
+
